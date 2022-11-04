@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  VpcId:
+    Description: What VPC would you like to associate with your Bastion Host Security Group?
+    Type: AWS::EC2::VPC::Id
+
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+
+  AmiID:
+    Description: Static reference to latest Amazon Linux 2 AMI
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
+    Default: "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
+    AllowedValues:
+      - "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
+
+  KeyPairName:
+    Description: Which Key Pair would you like to use for remote access?
+    Type: "AWS::EC2::KeyPair::KeyName"
+
+  SourceCidr:
+    Description: What is the CIDR Block of IPv4 IP addresses allowed to access your Bastion Host via SSH?
+    Type: String
+    AllowedPattern: "^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?).){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(/([0-9]|[1-2][0-9]|3[0-2]))?$"
+    ConstraintDescription: The value must be valid IPv4 CIDR block.
+    Default: 0.0.0.0/0
+
+  SshPort:
+    Description: What port number would you like to use to connect to your Bastion Host over SSH?
+    Type: Number
+    Default: 22
+    MinValue: 22
+    MaxValue: 65535
+
+  ElasticIpAllocationId:
+    Description: What is the Elastic IP address to be associated with EC2?
+    Type: String
+    Default: eipalloc-0c6ffa8ccfec21aa8
+
+  EnvironmentType:
+    Description: "Specify the Environment type of the stack."
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+Mappings:
+  EnvironmentToInstanceType:
+    dev:
+      InstanceType: t3.micro
+    test:
+      InstanceType: t3.micro
+    prod:
+      InstanceType: t3.small
+
+Metadata:
+  Purpose:
+    Description: "This template is used to create a EC2 instance as a bastion host."
+
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Bastion Host Parameters"
+        Parameters:
+          - VpcId
+          - KeyPairName
+          - AmiID
+          - Subnet1
+          - Subnet2
+          - SourceCidr
+          - SshPort
+          - ElasticIP
+    ParameterLabels:
+      VpcId:
+        default: "VPC Id"
+      KeyPairName:
+        default: "Key Pair Name"
+      AmiID:
+        default: "AMI ID"
+      Subnet1:
+        default: "Bastion Host Subnet 1"
+      Subnet2:
+        default: "Bastion Host Subnet 2"
+      SourceCidr:
+        default: "Origin CIDR block"
+      SshPort:
+        default: "SSH Port Number"
+
+Resources:
+  BastionInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      ImageId: !Ref AmiID
+      InstanceType:
+        !FindInMap [
+          EnvironmentToInstanceType,
+          !Ref EnvironmentType,
+          InstanceType,
+        ]
+      KeyName: !Ref KeyPairName
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      Tags:
+        - Key: "Name"
+          Value: "BastionHost"
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Join ["", [!Ref "AWS::StackName", "BastionHostSecurityGroup"]]
+      GroupDescription: Bastion Host Security Group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref SshPort
+          ToPort: !Ref SshPort
+          CidrIp: !Ref SourceCidr
+
+  ElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !Ref ElasticIpAllocationId
+      InstanceId: !Ref BastionInstance

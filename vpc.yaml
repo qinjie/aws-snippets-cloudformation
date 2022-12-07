@@ -1,0 +1,397 @@
+# Create VPC with public and private subnets
+# Number of subnet depends on number of AZ in the region
+# Use "Parameters" and "Conditions"
+
+AWSTemplateFormatVersion: 2010-09-09
+Description: VPC with 3 public subnets and optional 3 private subnets
+Metadata:
+  # Control the UI display when running this template from the AWS Management Console
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      Label:
+        Default: "Network Configuration"
+      Parameters:
+        - NumberOfAZs
+        - PrivateSubnets
+        - NATType
+
+Parameters:
+  KeyName:
+    Description: Name an existing EC2 KeyPair to enable SSH access to the instance,
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair.
+  NumberOfAZs:
+    Type: Number
+    AllowedValues:
+      - 1
+      - 2
+      - 3
+    Default: 2
+    Description: How many AZ to be utilized?
+  PrivateSubnets:
+    Type: String
+    AllowedValues:
+      - True
+      - False
+    Default: True
+    Description: Do you want to create private subnets too?
+  NATType:
+    Type: String
+    AllowedValues:
+      - "EC2 NAT Instance"
+      - "NAT Gateway"
+    Default:  "NAT Gateway"
+    Description: What type of NAT to use for private instances to communicate with the internet.  A single EC2 instance can be used as a NAT, or you can use the AWS NAT Gateway (managed, scalable, more expensive).  This setting will be IGNORED if you do not build private subnets.
+
+Mappings:
+  # AMI for NAT Instance
+  AmazonLinuxAMI:
+    us-east-1:
+      AMI: ami-04681a1dbd79675a5    # N Virginia
+    us-east-2:
+      AMI: ami-0cf31d971a3ca20d6    # Ohio     
+    us-west-1:
+      AMI: ami-0782017a917e973e7    # N California
+    us-west-2:
+      AMI: ami-6cd6f714             # Oregon
+    eu-west-1:
+      AMI: ami-0bdb1d6c15a40392c    # Ireland
+    eu-central-1:
+      AMI: ami-0f5dbc86dd9cbf7a8    # Frankfurt
+    sa-east-1:
+      AMI: ami-0ad7b0031d41ed4b9    # Sao Paulo
+    ap-southeast-1:
+      AMI: ami-01da99628f381e50a    # Singapore
+    ap-southeast-2:
+      AMI: ami-00e17d1165b9dd3ec    # Sydney
+    ap-northeast-1:
+      AMI: ami-08847abae18baa040    # Tokyo
+
+Conditions: 
+  BuildPublicB:         !Not [ !Equals [ !Ref NumberOfAZs, 1 ] ] 
+  BuildPublicC:         !Equals [ !Ref NumberOfAZs, 3 ]
+  BuildPrivateSubnets:  !Equals [ !Ref PrivateSubnets, True ]
+  BuildPrivateA:        !Equals [ !Ref PrivateSubnets, True ]
+  BuildPrivateB:        !And [ !Equals [ !Ref PrivateSubnets, True ], !Not [ !Equals [ !Ref NumberOfAZs, 1] ] ]
+  BuildPrivateC:        !And [ !Equals [ !Ref PrivateSubnets, True ], !Equals [ !Ref NumberOfAZs, 3 ] ]
+  BuildNatGateway:      !And [ !Equals [ !Ref PrivateSubnets, True ], !Equals [ !Ref NATType, "NAT Gateway" ] ]
+  BuildNatInstance:     !And [ !Equals [ !Ref PrivateSubnets, True ], !Equals [ !Ref NATType, "EC2 NAT Instance" ] ]
+
+Resources:
+  # VPC with internet gateway
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties: 
+      CidrBlock: 10.1.0.0/16
+      # Auto assign DNS name to all EC2 instances
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Join ["", [!Ref "AWS::StackName", "-VPC" ]]
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: VPC
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join ["", [!Ref "AWS::StackName", "-IG" ]]
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public Subnets
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.1.0.0/18
+      AvailabilityZone: !Select [0, !GetAZs ] # Get 1st AZ in current region
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-SN-Public-A
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Condition: BuildPublicB
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.1.64.0/19
+      AvailabilityZone: !Select [1, !GetAZs ] # Get 2nd AZ in current region
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-SN-Public-B
+
+  PublicSubnetC:
+    Type: AWS::EC2::Subnet
+    Condition: BuildPublicC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.1.96.0/19
+      AvailabilityZone: !Select [2, !GetAZs ] # Get 3rd AZ in current region
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-SN-Public-C
+
+  # Private Subnets
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Condition: BuildPrivateA
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.1.128.0/18
+      AvailabilityZone: !Select [0, !GetAZs ] # Get 1st subnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-SN-Private-A
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Condition: BuildPrivateB
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.1.192.0/19
+      AvailabilityZone: !Select [1, !GetAZs ] # Get 2nd subnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-SN-Private-B
+
+  PrivateSubnetC:
+    Type: AWS::EC2::Subnet
+    Condition: BuildPrivateC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.1.224.0/19
+      AvailabilityZone: !Select [2, !GetAZs ] # Get 2nd subnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-SN-Private-C
+
+  # Public Routing Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-RT-Public
+
+  PublicRoute1:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Private Route Table, which uses NAT Gateway
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: BuildPrivateSubnets
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-RT-Private
+
+  PrivateRoute1:
+    Type: AWS::EC2::Route
+    Condition: BuildPrivateSubnets
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      InstanceId:   !If [ BuildNatInstance, !Ref NATInstance, !Ref "AWS::NoValue" ]
+      NatGatewayId: !If [ BuildNatGateway, !Ref NATGateway, !Ref "AWS::NoValue" ]
+
+  # Elastic IP for NAT Gateway or Instance
+  ElasticIpAddress:
+    Type: AWS::EC2::EIP
+    Condition: BuildPrivateSubnets
+    Properties:
+      Domain: vpc
+
+  # NAT Gateway
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: BuildNatGateway
+    Properties:
+      AllocationId: !GetAtt ElasticIpAddress.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub NAT-${AWS::StackName}
+
+  # Security group for NAT Instance. Ingress from the VPC IPs only, and Egress is TCP & UDP only
+  NATSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: BuildNatInstance
+    DependsOn: AttachGateway
+    Properties:
+      GroupName: !Sub NATSecurityGroup-${AWS::StackName}
+      GroupDescription: Enable internal access to the NAT device
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '0'
+          ToPort: '1024'
+          CidrIp: !GetAtt VPC.CidrBlock
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: udp
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: 0.0.0.0/0
+
+  NATNetworkInterface:
+    Type: AWS::EC2::NetworkInterface
+    Condition: BuildNatInstance
+    Properties:
+      SubnetId: !Ref PublicSubnetA                  # Any public subnet is fine
+      Description: Interface for controlling NAT traffic 
+      GroupSet: [!Ref NATSecurityGroup]             # Plug in the security group
+      SourceDestCheck: false  # NATs don't work if EC2 matches source with destinations.
+      Tags:
+      - Key: Name
+        Value: NI-NAT
+
+  AssociateEIP:
+    Type: AWS::EC2::EIPAssociation
+    Condition: BuildNatInstance
+    Properties:
+      AllocationId: !GetAtt ElasticIpAddress.AllocationId
+      NetworkInterfaceId: !Ref NATNetworkInterface
+
+  # NAT Instance if the user selected Private subnets and EC2-based NAT
+  NATInstance:
+    Type: AWS::EC2::Instance
+    Condition: BuildNatInstance
+    DependsOn: PublicRoute1                           # Must have route to IGW established.
+    Properties:
+      ImageId: !FindInMap [ AmazonLinuxAMI, !Ref "AWS::Region", AMI]  # lookup from AMI map
+      KeyName: !Ref KeyName
+      InstanceType: t3.micro                          # Any instance type is fine
+      NetworkInterfaces:
+      - NetworkInterfaceId: !Ref NATNetworkInterface
+        DeviceIndex: '0'
+      Tags:
+      - Key: Name
+        Value: !Sub NAT-${AWS::StackName}
+      UserData:      #  This code is NAT code.  Last line signals completion:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum -y update
+          yum install -y aws-cfn-bootstrap
+          echo 1 > /proc/sys/net/ipv4/ip_forward
+          echo 0 > /proc/sys/net/ipv4/conf/eth0/send_redirects
+          /sbin/iptables -t nat -A POSTROUTING -o eth0 -s 0.0.0.0/0 -j MASQUERADE
+          /sbin/iptables-save > /etc/sysconfig/iptables
+          mkdir -p /etc/sysctl.d/
+          cat << NatConfFileMarker > /etc/sysctl.d/nat.conf
+          net.ipv4.ip_forward = 1
+          net.ipv4.conf.eth0.send_redirects = 0
+          NatConfFileMarker
+          /opt/aws/bin/cfn-signal -e 0 --resource NATInstance --stack ${AWS::StackName} --region ${AWS::Region}
+    # This NATInstance is only complete when you get 1 signal back within 5 minutes'.
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT5M
+
+  # Attach public subnets to route tables
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: BuildPublicB
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnetCRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: BuildPublicC
+    Properties:
+      SubnetId: !Ref PublicSubnetC
+      RouteTableId: !Ref PublicRouteTable
+
+  # Attach private subnets to route tables
+  PrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: BuildPrivateA
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+  PrivateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: BuildPrivateB
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+  PrivateSubnetCRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: BuildPrivateC
+    Properties:
+      SubnetId: !Ref PrivateSubnetC
+      RouteTableId: !Ref PrivateRouteTable
+
+# Output
+Outputs:
+  VPC:
+    Description: VPC of the base network
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${AWS::StackName}-VPC
+  PublicSubnetA:
+    Description: Public Subnet A
+    Value: !Ref PublicSubnetA
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicSubnetA
+  PublicSubnetB:
+    Description: Public Subnet B
+    Condition: BuildPublicB
+    Value: !Ref PublicSubnetB
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicSubnetB
+  PublicSubnetC:
+    Description: Public Subnet C
+    Condition: BuildPublicC
+    Value: !Ref PublicSubnetC
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicSubnetC
+  PrivateSubnetA:
+    Condition: BuildPrivateSubnets
+    Description: Private Subnet A
+    Value: !Ref PrivateSubnetA
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateSubnetA
+  PrivateSubnetB:
+    Condition: BuildPrivateB
+    Description: Private Subnet B
+    Value: !Ref PrivateSubnetB
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateSubnetB
+  PrivateSubnetC:
+    Condition: BuildPrivateC
+    Description: Private Subnet C
+    Value: !Ref PrivateSubnetC
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateSubnetC
+  NATInstance:
+    Condition: BuildNatInstance
+    Description: NAT Instance
+    Value: !Ref NATInstance
+    Export:
+      Name: !Sub ${AWS::StackName}-NAT-Instance
+  NATGateway:
+    Condition: BuildNatGateway
+    Description: NAT Gateway
+    Value: !Ref NATGateway
+    Export:
+      Name: !Sub ${AWS::StackName}-NAT-Gateway
